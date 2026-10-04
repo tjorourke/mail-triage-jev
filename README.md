@@ -5,6 +5,8 @@ Local AI email triage for Gmail. A small open model runs **on your own Mac** (no
 - **Filters junk**: cold sales, marketing and spam get a label and leave your inbox. Nothing is ever deleted.
 - **Flags what matters**: your VIPs, travel bookings, and anything with a question or task for you get a red label.
 - **Tags customers**: one label per customer company (`Customers/acme.example`), learned from your own labels.
+- **Keeps customer work moving**: `AI/Needs-Reply` when a customer is waiting on you (turning `AI/Reply-Overdue` after 48 hours), a topic label on each customer email (`Topic/POC`, `Topic/RFP`, `Topic/Pricing-Contract`, `Topic/Technical`, `Topic/Scheduling`) plus `Topic/Escalation` for an unhappy customer.
+- **Spots urgency**: `AI/Urgent` on mail that needs action today or tomorrow.
 
 It uses [Cloudflare Clef-flash](https://huggingface.co/Cloudflare/clef-flash), an open "decision model" (API-compatible with TypeSafe's Jev) that returns probabilities instead of text.
 
@@ -93,7 +95,9 @@ macOS may ask once for Keychain access; choose **Always Allow**. The model is lo
 | `triage promote` | Move everything tagged `AI/WouldFilter` out of the inbox |
 | `triage undo --since 24h` | Put recently filtered mail back in the inbox |
 | `triage report` | Counts, precision, what was filtered and flagged |
-| `triage flag --days 14` | Mark important mail (VIPs, bookings, questions/tasks) already in the inbox |
+| `triage flag --days 14 [--redo]` | Mark important and urgent mail (VIPs, bookings, questions/tasks) already in the inbox |
+| `triage reply [--dry-run]` | Refresh `AI/Needs-Reply` on customer threads where the customer wrote last and asked you something |
+| `triage topics --days 365` | Label the conversation type (POC, RFP, pricing, technical, scheduling, escalation) on customer email |
 | `triage customers discover` | Ask the AI which companies look like customers or prospects |
 | `triage customers candidates` / `add <domain>` / `approve` | Review and approve them |
 | `triage customers list` / `remove <domain>` | Show / drop customers |
@@ -114,6 +118,8 @@ In order, the first match wins:
 Mail that fails Gmail's sender-authentication check (someone faking a domain) never gets the benefit of the "trusted domain" rules.
 
 ## Customers
+
+Customer mail gets three extra helpers (all configurable in `config.toml`): **Needs reply** (the customer wrote last and asked you something; calendar invites, automatic replies and mass mailings are ignored), **topic labels**, and an **escalation** flag.
 
 Put the **`Customers`** label on any email from a new company. On the next run it learns that company's domain, creates `Customers/<domain>`, and labels every email to or from that domain. Delete a customer's label to drop them. See `config.example.toml` for all the options.
 

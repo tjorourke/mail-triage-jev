@@ -139,20 +139,72 @@ def list_ids_by_label(svc, label_id, limit=20000):
     return out
 
 
+def list_ids_with_labels(svc, label_ids, q="", limit=5000):
+    """Messages that carry ALL the given labels (optionally narrowed by a search), as (id, threadId) pairs."""
+    out, token = [], None
+    while len(out) < limit:
+        r = backoff(lambda: svc.users().messages().list(
+            userId="me", labelIds=list(label_ids), q=q, maxResults=500, pageToken=token).execute(num_retries=3))
+        out += [(m["id"], m["threadId"]) for m in r.get("messages", [])]
+        token = r.get("nextPageToken")
+        if not token:
+            break
+    return out
+
+
+def _batch_retry(svc, keys, build_request, on_ok):
+    """Run many requests in batches; items refused for rate limits are retried after a pause (never silently dropped)."""
+    todo, delay = list(keys), 20
+    for attempt in range(6):
+        failed = []
+
+        def cb(rid, resp, exc, _failed=failed):
+            if exc is None:
+                on_ok(rid, resp)
+            elif isinstance(exc, HttpError) and _is_rate_limit(exc):
+                _failed.append(rid)
+
+        for i in range(0, len(todo), 30):
+            b = svc.new_batch_http_request(callback=cb)
+            for k in todo[i:i + 30]:
+                b.add(build_request(k), request_id=k)
+            backoff(b.execute)
+        todo = failed
+        if not todo:
+            return
+        log.info("gmail rate limit on %d requests; waiting %ds", len(todo), delay)
+        time.sleep(delay)
+        delay = min(delay * 2, 120)
+
+
+def get_threads_meta(svc, thread_ids):
+    """thread id -> list of messages (id, labelIds, internalDate in seconds, headers), oldest first."""
+    out = {}
+
+    def ok(rid, resp):
+        msgs = []
+        for m in resp.get("messages", []):
+            h = {x["name"].lower(): x["value"] for x in m.get("payload", {}).get("headers", [])}
+            msgs.append({"id": m["id"], "labels": set(m.get("labelIds", [])),
+                         "ts": int(m.get("internalDate", 0)) // 1000, "headers": h})
+        out[resp["id"]] = sorted(msgs, key=lambda x: x["ts"])
+
+    _batch_retry(svc, thread_ids,
+                 lambda tid: svc.users().threads().get(userId="me", id=tid, format="metadata",
+                                                      metadataHeaders=["From", "To", "Cc", "Subject", "Delivered-To"]), ok)
+    return out
+
+
 def get_headers(svc, ids):
     """message id -> {header name (lowercase): value} for From/To/Cc/Subject (metadata only)."""
     out = {}
 
-    def cb(rid, resp, exc):
-        if exc is None:
-            out[resp["id"]] = {h["name"].lower(): h["value"] for h in resp.get("payload", {}).get("headers", [])}
+    def ok(rid, resp):
+        out[resp["id"]] = {h["name"].lower(): h["value"] for h in resp.get("payload", {}).get("headers", [])}
 
-    for i in range(0, len(ids), 40):
-        b = svc.new_batch_http_request(callback=cb)
-        for mid in ids[i:i + 40]:
-            b.add(svc.users().messages().get(userId="me", id=mid, format="metadata",
-                                             metadataHeaders=["From", "To", "Cc", "Subject"]))
-        backoff(b.execute)
+    _batch_retry(svc, list(ids),
+                 lambda mid: svc.users().messages().get(userId="me", id=mid, format="metadata",
+                                                       metadataHeaders=["From", "To", "Cc", "Subject"]), ok)
     return out
 
 

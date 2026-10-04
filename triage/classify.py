@@ -75,6 +75,37 @@ def customer_question(cfg):
     }
 
 
+TOPICS = {
+    "poc_or_pilot": "A proof of concept (POC), pilot, trial or evaluation of the product: setting it up, progress, "
+                    "results, success criteria, or the next steps of the evaluation.",
+    "rfi_or_rfp": "A request for information (RFI), request for proposal (RFP), tender, vendor questionnaire or "
+                  "procurement process.",
+    "pricing_or_contract": "Pricing, quotes, licences, order forms, contracts, legal terms, NDAs, renewals, budget or purchasing.",
+    "technical_question": "Technical, architecture, configuration, troubleshooting or how-to questions about the product, "
+                          "or asking for engineering help or support.",
+    "scheduling_or_meeting": "Arranging, moving or confirming meetings, calls, workshops or demos; agendas and logistics.",
+    "general_follow_up": "Introductions, thanks, general status updates and follow-ups that fit none of the other kinds.",
+}
+
+TOPIC_QUESTION = {"type": "choice", "criteria": TOPICS,
+                  "instructions": "This is an email in a conversation with a customer or prospect. What is it mainly about?"}
+
+ESCALATION_QUESTION = {
+    "type": "noul",
+    "instructions": ("Is the sender frustrated, unhappy, threatening to leave, or escalating a problem or complaint "
+                     "(for example mentioning management, deadlines at risk, or issues that are still unresolved)? "
+                     "Polite routine questions and ordinary follow-ups do not count."),
+}
+
+URGENCY_QUESTION = {
+    "type": "score",
+    "instructions": "How urgent is this email for the recipient?",
+    "criteria": ["Can wait: no deadline or time pressure.",
+                 "Needs attention this week.",
+                 "Urgent: a reply or action is needed today or tomorrow, or a deadline is imminent."],
+}
+
+
 def build_state(m, body_chars, me=frozenset(), known_sender=False, replied_in_thread=False):
     body = m.body[:body_chars]
     return {
@@ -143,6 +174,30 @@ class Classifier:
             resp = systemone(self.model, self.processor, request,
                              max_length=self.cfg["model"]["max_state_tokens"] + 1500)
         return resp["answers"]["customer"]["noul"]
+
+    def _ask(self, m, me, known_sender, replied_in_thread, questions):
+        if self.model is None:
+            self._load()
+        import torch
+        from joint_schema_model import systemone
+        request = {"model": "clef-flash", "state": build_state(m, self.cfg["model"]["body_chars"], me, known_sender, replied_in_thread),
+                   "questions": questions}
+        self.last_used = time.time()
+        with torch.inference_mode():
+            resp = systemone(self.model, self.processor, request,
+                             max_length=self.cfg["model"]["max_state_tokens"] + 1500)
+        return resp["answers"]
+
+    def topic_probs(self, m, me=frozenset(), known_sender=True, replied_in_thread=False):
+        """{topic: probability} for a customer email."""
+        return self._ask(m, me, known_sender, replied_in_thread, {"topic": TOPIC_QUESTION})["topic"]["probabilities"]
+
+    def escalation_prob(self, m, me=frozenset(), known_sender=True, replied_in_thread=False):
+        return self._ask(m, me, known_sender, replied_in_thread, {"escalation": ESCALATION_QUESTION})["escalation"]["noul"]
+
+    def urgent_prob(self, m, me=frozenset(), known_sender=False, replied_in_thread=False):
+        """Probability that the email needs action today or tomorrow."""
+        return self._ask(m, me, known_sender, replied_in_thread, {"urgency": URGENCY_QUESTION})["urgency"]["probabilities"]["2"]
 
     def unload(self):
         if self.model is None:

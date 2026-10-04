@@ -126,3 +126,33 @@ ignore_domains = [          # never treated as customers
   "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com", "me.com",
   "proton.me", "protonmail.com", "aol.com", "msn.com",
 ]
+
+# ------------------------------------------------------------------------------------------------
+# Customers: which emails need my reply, and what each conversation is about
+# ------------------------------------------------------------------------------------------------
+# Needs my reply: the latest email in a customer thread is from the customer, is a question/request for me, and nobody
+# on my side has answered. It gets AI/Needs-Reply, and AI/Reply-Overdue once it has waited too long.
+# The label clears by itself when I (or a colleague) reply, or when I archive the thread.
+[needs_reply]
+enabled = true
+label = "AI/Needs-Reply"
+overdue_label = "AI/Reply-Overdue"
+overdue_hours = 48
+threshold = 0.60            # how sure the AI must be that the email asks me something
+max_age_days = 30           # only look at customer threads active in this window
+
+# Conversation type: each customer email gets one topic label, e.g. Topic/POC, Topic/RFP, Topic/Technical.
+# Topic/Escalation is separate: it marks an unhappy or escalating customer, whatever the topic.
+[topics]
+enabled = true
+prefix = "Topic"
+min_conf = 0.45             # how sure the AI must be about the topic before labelling
+escalation_threshold = 0.70
+
+# ------------------------------------------------------------------------------------------------
+# Urgency: AI/Urgent on mail that needs action today or tomorrow (only mail that asks me something is assessed)
+# ------------------------------------------------------------------------------------------------
+[urgency]
+enabled = true
+label = "AI/Urgent"
+threshold = 0.60

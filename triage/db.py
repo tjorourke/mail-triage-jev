@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS customer_candidates (
   domain TEXT PRIMARY KEY, n_positive INTEGER, n_assessed INTEGER, best_p REAL, sample_from TEXT, sample_subject TEXT, ts INTEGER
 );
 CREATE TABLE IF NOT EXISTS customer_labeled (message_id TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS needs_reply (
+  thread_id TEXT PRIMARY KEY, message_id TEXT, needs INTEGER, p REAL, last_ts INTEGER, labeled TEXT, updated INTEGER
+);
+CREATE TABLE IF NOT EXISTS topics (
+  message_id TEXT PRIMARY KEY, topic TEXT, p REAL, escalation REAL, ts INTEGER
+);
+CREATE TABLE IF NOT EXISTS urgency (
+  message_id TEXT PRIMARY KEY, p REAL, urgent INTEGER, ts INTEGER
+);
 CREATE TABLE IF NOT EXISTS contacts (addr TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS sent_threads (thread_id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS learned (addr TEXT PRIMARY KEY, kind TEXT, ts INTEGER, source TEXT);
@@ -112,6 +121,33 @@ class DB:
 
     def candidates(self):
         return self.c.execute("SELECT * FROM customer_candidates ORDER BY n_positive DESC, best_p DESC").fetchall()
+
+    # needs-reply tracking
+    def get_needs_reply(self, thread_id):
+        return self.c.execute("SELECT * FROM needs_reply WHERE thread_id=?", (thread_id,)).fetchone()
+
+    def set_needs_reply(self, thread_id, message_id, needs, p, last_ts, labeled_json):
+        self.c.execute("INSERT OR REPLACE INTO needs_reply VALUES (?,?,?,?,?,?,?)",
+                       (thread_id, message_id, int(needs), p, last_ts, labeled_json, int(time.time())))
+        self.c.commit()
+
+    def open_needs_reply(self):
+        return self.c.execute("SELECT * FROM needs_reply WHERE needs=1").fetchall()
+
+    # topics and urgency
+    def topic_seen(self, message_id):
+        return self.c.execute("SELECT 1 FROM topics WHERE message_id=?", (message_id,)).fetchone() is not None
+
+    def record_topic(self, message_id, topic, p, escalation):
+        self.c.execute("INSERT OR REPLACE INTO topics VALUES (?,?,?,?,?)", (message_id, topic, p, escalation, int(time.time())))
+        self.c.commit()
+
+    def urgency_seen(self, message_id):
+        return self.c.execute("SELECT 1 FROM urgency WHERE message_id=?", (message_id,)).fetchone() is not None
+
+    def record_urgency(self, message_id, p, urgent):
+        self.c.execute("INSERT OR REPLACE INTO urgency VALUES (?,?,?,?)", (message_id, p, int(urgent), int(time.time())))
+        self.c.commit()
 
     # contacts (people I have emailed)
     def add_contacts(self, addrs):

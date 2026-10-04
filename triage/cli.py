@@ -6,8 +6,9 @@ import re
 import sys
 import time
 from collections import Counter
+from contextlib import contextmanager
 
-from . import customers, gmail, pause, rules
+from . import customers, gmail, needsreply, pause, rules, topics
 from .classify import Classifier, decide, junk_mass
 from .config import load, read_list
 from .db import DB
@@ -47,6 +48,19 @@ def label_ids(svc, cfg):
     if cfg["customers"]["enabled"]:
         names.append(cfg["customers"]["parent_label"])
         colors[cfg["customers"]["parent_label"]] = customers.COLOR
+    if cfg["needs_reply"]["enabled"]:
+        nr = cfg["needs_reply"]
+        names += [nr["label"], nr["overdue_label"]]
+        colors[nr["label"]] = {"textColor": "#ffffff", "backgroundColor": "#8e63ce"}        # purple
+        colors[nr["overdue_label"]] = {"textColor": "#ffffff", "backgroundColor": "#cc3a21"}  # red
+    if cfg["topics"]["enabled"]:
+        for n in topics.label_names(cfg):
+            names.append(n)
+            colors[n] = ({"textColor": "#ffffff", "backgroundColor": "#cc3a21"} if n.endswith("Escalation")
+                         else {"textColor": "#ffffff", "backgroundColor": "#149e60"})        # green, escalation red
+    if cfg["urgency"]["enabled"]:
+        names.append(cfg["urgency"]["label"])
+        colors[cfg["urgency"]["label"]] = {"textColor": "#000000", "backgroundColor": "#ffad47"}  # orange
     return gmail.ensure_labels(svc, names, colors)
 
 
@@ -194,6 +208,19 @@ def consider_customer(svc, db, cfg, m, action, clf, me, probs, known, state):
             state["added"] += 1
 
 
+def assess_urgency(cfg, m, clf, me, known, p_ask, why):
+    """-> (urgent, probability). Only mail that asks me something (or comes from a VIP) is assessed."""
+    u = cfg["urgency"]
+    if not u["enabled"] or not rules.eligible_for_task_check(m, me):
+        return False, None
+    # Only mail that is already important for a personal reason (a VIP, or a real person asking me something).
+    # This keeps automated notices such as password resets out, as they are for importance.
+    if why not in ("vip", "question_or_task"):
+        return False, None
+    p = clf.urgent_prob(m, me, *known)
+    return p >= u["threshold"], p
+
+
 def build_ctx(db, cfg):
     sent_threads = db.sent_threads()
     me = {a.lower() for a in cfg["my_addresses"]} | cfg.get("_me", set())
@@ -248,6 +275,12 @@ def process(svc, db, cfg, lab, mails, clf, dry_run=False):
         if important:
             add = list(add) + important_labels(cfg, lab)
             counts["important"] += 1
+        urgent, p_urg = assess_urgency(cfg, m, clf, me, known, p_act, why) if action == "keep" else (False, None)
+        if urgent:
+            add = list(add) + [lab[cfg["urgency"]["label"]]]
+            counts["urgent"] += 1
+        if p_urg is not None and not dry_run:
+            db.record_urgency(m.id, p_urg, urgent)
         if cust and cparent:
             cl = customers.labels_for(m, cust, cparent)
             if cl:
@@ -255,10 +288,15 @@ def process(svc, db, cfg, lab, mails, clf, dry_run=False):
                 counts["customer"] += 1
                 if not dry_run:
                     db.mark_customer_labeled([m.id])
+                names, topic, p_t, p_e = topics.assess(cfg, clf, m, me, (True, known[1]))
+                add = list(add) + [lab[n] for n in names]
+                if topic and not dry_run:
+                    db.record_topic(m.id, topic, p_t, p_e)
         consider_customer(svc, db, cfg, m, action, clf, me, probs, known, cstate)
         counts[action] += 1
         log.info("%-10s %.2f %-24s %-34s | %s%s", action.upper(), conf, cat, m.from_addr[:34], m.subject[:60],
-                 f"   *** IMPORTANT ({why}{'' if p_act is None else f' {p_act:.2f}'})" if important else "")
+                 (f"   *** IMPORTANT ({why}{'' if p_act is None else f' {p_act:.2f}'})" if important else "")
+                 + (f"   *** URGENT ({p_urg:.2f})" if urgent else ""))
         if not dry_run:
             db.record(m, cat, conf, action, by, cfg["mode"], False, probs)
             db.record_importance(m, important, why, p_act)
@@ -313,6 +351,14 @@ def _run_once(args, cfg, clf=None):
             customers.sync(svc, db, cfg)
         except Exception:
             log.exception("customer label sync failed; the junk filter carries on")
+        try:
+            clf = clf or Classifier(cfg)
+            n_open, n_over, n_new = needsreply.evaluate(
+                svc, db, cfg, lab, clf, {a.lower() for a in cfg["my_addresses"]} | cfg["_me"])
+            if n_open:
+                log.info("needs my reply: %d customer threads waiting (%d overdue, %d new)", n_open, n_over, n_new)
+        except Exception:
+            log.exception("needs-reply check failed; the junk filter carries on")
     ids = gmail.list_ids(svc, f"in:inbox newer_than:{cfg['lookback_days']}d", cfg["max_per_run"])
     new = [i for i in ids if not db.seen(i)]
     if not new:
@@ -489,14 +535,23 @@ def sync_importance_feedback(svc, db, cfg, lab):
             log.info("feedback: not important after all: %s", r["from_addr"])
 
 
-def cmd_flag(args, cfg):
-    """Mark important mail among what is ALREADY in the inbox (the hourly run handles new mail)."""
+@contextmanager
+def run_lock(cfg):
+    """Only one job at a time may use the model / change labels (shared with the hourly service)."""
     lock = open(cfg["root"] / "logs" / "run.lock", "w")
     try:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise SystemExit("another run is in progress; try again in a few minutes")
+        yield
+    finally:
+        lock.close()
+
+
+def cmd_flag(args, cfg):
+    """Mark important and urgent mail among what is ALREADY in the inbox (the hourly run handles new mail)."""
+    with run_lock(cfg):
         db = DB(cfg["db_path"])
         svc = gmail.get_service(interactive=False)
         lab = label_ids(svc, cfg)
@@ -505,33 +560,99 @@ def cmd_flag(args, cfg):
         me = ctx["me"]
         ids = gmail.list_ids(svc, f"in:inbox newer_than:{args.days}d", args.limit)
         todo = ids if args.redo else [i for i in ids if not db.importance_seen(i)]
-        # Mail the junk filter removed from the inbox is never important.
-        junk = {r[0] for r in db.c.execute("SELECT message_id FROM decisions WHERE action != 'keep'")}
+        junk = {r[0] for r in db.c.execute("SELECT message_id FROM decisions WHERE action != 'keep'")}   # filtered: never important
         todo = [i for i in todo if i not in junk]
         log.info("flag: %d inbox emails from the last %d days, %d to assess", len(ids), args.days, len(todo))
-        clf, found, pending = Classifier(cfg), [], []
+        clf, n_imp, n_urg, pending = Classifier(cfg), 0, 0, {}
+
+        def flush():
+            for labels, mids in pending.items():
+                gmail.modify(svc, mids, add=list(labels))
+            pending.clear()
+
         for i in range(0, len(todo), CHUNK):
             for m in gmail.get_full(svc, todo[i:i + CHUNK]):
                 known = (m.from_addr in ctx["contacts"], ctx["thread_has_sent"](m.thread_id))
                 important, why, p = assess_importance(cfg, m, "keep", clf, me, None, known)
-                if important:
-                    found.append(m.id)
-                    log.info("IMPORTANT (%s%s) %-34s | %s", why, "" if p is None else f" {p:.2f}", m.from_addr[:34], m.subject[:62])
+                urgent, p_urg = assess_urgency(cfg, m, clf, me, known, p, why)
+                add = (important_labels(cfg, lab) if important else []) + ([lab[cfg["urgency"]["label"]]] if urgent else [])
+                n_imp += important
+                n_urg += urgent
+                if important or urgent:
+                    log.info("%s%s %-34s | %s", f"IMPORTANT ({why}{'' if p is None else f' {p:.2f}'})  " if important else "",
+                             f"URGENT ({p_urg:.2f})  " if urgent else "", m.from_addr[:34], m.subject[:60])
                 elif args.verbose and p is not None:
                     log.info("   not important (%.2f)  %-34s | %s", p, m.from_addr[:34], m.subject[:62])
                 if not args.dry_run:
                     db.record_importance(m, important, why, p)
-                    if important:
-                        pending.append(m.id)
-                    if len(pending) >= 20:
-                        gmail.modify(svc, pending, add=important_labels(cfg, lab))
-                        pending.clear()
+                    if p_urg is not None:
+                        db.record_urgency(m.id, p_urg, urgent)
+                    if add:
+                        pending.setdefault(tuple(add), []).append(m.id)
+                    if sum(len(v) for v in pending.values()) >= 20:
+                        flush()
             log.info("progress: %d / %d", min(i + CHUNK, len(todo)), len(todo))
-        if pending:
-            gmail.modify(svc, pending, add=important_labels(cfg, lab))
-        log.info("flag%s: %d marked important out of %d assessed", " DRY-RUN" if args.dry_run else "", len(found), len(todo))
-    finally:
-        lock.close()
+        if not args.dry_run:
+            flush()
+        log.info("flag%s: %d marked important, %d urgent, out of %d assessed",
+                 " DRY-RUN" if args.dry_run else "", n_imp, n_urg, len(todo))
+
+
+def cmd_reply(args, cfg):
+    """Refresh the 'needs my reply' labels on customer threads now."""
+    with run_lock(cfg):
+        db = DB(cfg["db_path"])
+        svc = gmail.get_service(interactive=False)
+        lab = label_ids(svc, cfg)
+        cfg["_me"] = gmail.my_addresses(svc)
+        me = {a.lower() for a in cfg["my_addresses"]} | cfg["_me"]
+        n_open, n_over, n_new = needsreply.evaluate(svc, db, cfg, lab, Classifier(cfg), me,
+                                                    dry_run=args.dry_run, verbose=args.verbose)
+        print(f"{n_open} customer threads need my reply ({n_over} overdue, {n_new} new){' [dry run]' if args.dry_run else ''}")
+
+
+def cmd_topics(args, cfg):
+    """Label the conversation type (POC, RFP, ...) on customer email already in the mailbox."""
+    with run_lock(cfg):
+        db = DB(cfg["db_path"])
+        svc = gmail.get_service(interactive=False)
+        lab = label_ids(svc, cfg)
+        cfg["_me"] = gmail.my_addresses(svc)
+        me = {a.lower() for a in cfg["my_addresses"]} | cfg["_me"]
+        parent_id = lab[cfg["customers"]["parent_label"]]
+        pairs = gmail.list_ids_with_labels(svc, [parent_id], f"newer_than:{args.days}d", args.limit)
+        todo = [i for i, _ in pairs if not db.topic_seen(i)]
+        log.info("topics: %d customer emails in the last %d days, %d to assess", len(pairs), args.days, len(todo))
+        clf, counts, pending = Classifier(cfg), Counter(), {}
+
+        def flush():
+            for labels, mids in pending.items():
+                gmail.modify(svc, mids, add=list(labels))
+            pending.clear()
+
+        for i in range(0, len(todo), CHUNK):
+            for m in gmail.get_full(svc, todo[i:i + CHUNK]):
+                names, topic, p_t, p_e = topics.assess(cfg, clf, m, me)
+                if topic is None:
+                    if not args.dry_run:
+                        db.record_topic(m.id, "n/a", None, None)   # automated / mine: nothing to label
+                    continue
+                counts[topic] += 1
+                if names and "Escalation" in names[-1]:
+                    counts["ESCALATION"] += 1
+                    log.info("ESCALATION? %-30s | %s", m.from_addr[:30], m.subject[:60])
+                if args.verbose:
+                    log.info("%-22s %.2f %-30s | %s", topic, p_t, m.from_addr[:30], m.subject[:50])
+                if not args.dry_run:
+                    db.record_topic(m.id, topic, p_t, p_e)
+                    if names:
+                        pending.setdefault(tuple(lab[n] for n in names), []).append(m.id)
+                    if sum(len(v) for v in pending.values()) >= 20:
+                        flush()
+            log.info("progress: %d / %d", min(i + CHUNK, len(todo)), len(todo))
+        if not args.dry_run:
+            flush()
+        log.info("topics%s: %s", " DRY-RUN" if args.dry_run else "", dict(counts))
 
 
 def cmd_customers(args, cfg):
@@ -750,6 +871,16 @@ def main():
     cu.add_argument("--limit", type=int, default=800)
     cu.add_argument("--dry-run", action="store_true")
     cu.set_defaults(fn=cmd_customers)
+    rp2 = sub.add_parser("reply", help="refresh the 'needs my reply' labels on customer threads")
+    rp2.add_argument("--dry-run", action="store_true")
+    rp2.add_argument("--verbose", action="store_true")
+    rp2.set_defaults(fn=cmd_reply)
+    tp = sub.add_parser("topics", help="label the conversation type (POC, RFP, ...) on customer email")
+    tp.add_argument("--days", type=int, default=365)
+    tp.add_argument("--limit", type=int, default=3000)
+    tp.add_argument("--dry-run", action="store_true")
+    tp.add_argument("--verbose", action="store_true")
+    tp.set_defaults(fn=cmd_topics)
     pr = sub.add_parser("promote", help="move everything tagged AI/WouldFilter out of the inbox")
     pr.add_argument("--dry-run", action="store_true")
     pr.set_defaults(fn=cmd_promote)
