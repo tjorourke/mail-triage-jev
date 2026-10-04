@@ -1,0 +1,3 @@
+#!/bin/bash
+# Run by a Shortcuts automation when Do Not Disturb turns OFF: let the mail triage service run again.
+exec "$(cd "$(dirname "$0")/.." && pwd)/.venv/bin/triage" resume

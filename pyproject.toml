@@ -1,0 +1,27 @@
+[project]
+name = "mail-triage"
+version = "0.1.0"
+description = "Local AI email triage for Gmail: labels junk, flags what matters, tags customers. Runs a small open model on your own Mac."
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.15.0",
+    "google-api-python-client>=2.201.0",
+    "google-auth-oauthlib>=1.5.0",
+    "huggingface-hub>=1.33.0",
+    "keyring>=25.7.0",
+    "pillow>=12.3.0",
+    "tldextract>=5.4.0",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+    "transformers==5.10.2",
+]
+
+[project.scripts]
+triage = "triage.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["triage"]

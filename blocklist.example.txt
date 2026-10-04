@@ -1,0 +1,5 @@
+# Senders always filed to AI/Filtered. One per line; lines starting with # are comments.
+#   @domain.com   = anyone at that domain      a@b.com = exactly that sender
+# The allowlist wins if a sender is on both. Examples:
+# @spammy-leadgen.example
+# cold.sender@agency.example

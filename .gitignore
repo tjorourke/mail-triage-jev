@@ -1,0 +1,20 @@
+# Credentials and personal data: NEVER commit
+client_secret.json
+config.toml
+allowlist.txt
+blocklist.txt
+triage.db
+*.db
+logs/
+.env
+
+# Model weights (downloaded separately, ~18 GB)
+models/
+
+# Python / tooling
+.venv/
+__pycache__/
+*.pyc
+
+# Local launchd file, if you made one by hand
+*.plist

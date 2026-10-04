@@ -1,0 +1,128 @@
+# mail-triage configuration.
+#
+# Setup:  cp config.example.toml config.toml   (config.toml is git-ignored: it holds YOUR people, domains and customers)
+# After editing, the next run picks changes up. If the background service is installed, restart it:
+#         ./service.sh restart
+
+# ------------------------------------------------------------------------------------------------
+# Mode
+# ------------------------------------------------------------------------------------------------
+# shadow = only tag what *would* be filtered (label AI/WouldFilter) and leave the inbox alone. START HERE.
+# live   = tag AI/Filtered and archive (remove from inbox). Nothing is ever deleted.
+mode = "shadow"
+
+# Act only when the model's combined probability for an action is at least this (0-1). Higher = more cautious.
+threshold = 0.85
+# Mail addressed ONLY to me (nobody else in To/Cc) is more likely to be cold outreach, so the bar is a bit lower.
+threshold_only_to_me = 0.80
+
+# Each run looks at inbox mail from the last N days that it has not seen before.
+lookback_days = 14
+max_per_run = 200
+
+# ------------------------------------------------------------------------------------------------
+# Background service (see README: "Run it automatically")
+# ------------------------------------------------------------------------------------------------
+interval_seconds = 3600     # how often to check
+idle_unload_minutes = 10    # free the model's memory this long after a run
+only_on_power = true        # skip runs while on battery
+# The service also stands down when `triage pause` is on (see "Pause" in the README).
+
+# ------------------------------------------------------------------------------------------------
+# Who is "me"
+# ------------------------------------------------------------------------------------------------
+# Mail from these domains is always kept (needs a passing DMARC check, so a forged sender is not trusted).
+own_domains = ["yourcompany.com"]
+# Your own addresses, including aliases. (Gmail aliases and each message's Delivered-To are also detected.)
+my_addresses = ["you@yourcompany.com"]
+# Always kept, including subdomains, unless Gmail says the sender is impersonating someone.
+# Good for senders whose authentication is weak but whose mail you must never miss, e.g. your clinic, your school:
+keep_domains = [
+  # "myclinic.example",
+]
+
+[model]
+path = "models/clef-flash"
+device = "mps"              # mps (Apple GPU) | cpu | cuda
+max_state_tokens = 1500
+body_chars = 2000
+
+# Context given to the AI about your work. Edit these for your own company.
+[profile]
+company = "Your Company"
+role = "Engineer"
+company_summary = "a company that makes software"
+trusted_examples = "airlines, banks, cloud and SaaS vendors you use"
+products = "your products and technologies, e.g. API gateway, Kubernetes, data platform"
+
+# ------------------------------------------------------------------------------------------------
+# Labels (created in Gmail automatically)
+# ------------------------------------------------------------------------------------------------
+[labels]
+filtered = "AI/Filtered"
+would_filter = "AI/WouldFilter"
+newsletters = "AI/Newsletters"
+
+# What to do with each kind of mail the AI recognises: keep | filter | newsletter
+[actions]
+real_work_or_personal = "keep"
+transactional_or_account = "keep"
+work_notification = "keep"
+event_or_webinar = "keep"
+newsletter = "newsletter"
+marketing = "filter"
+cold_sales_outreach = "filter"
+spam_or_phishing = "filter"
+
+# ------------------------------------------------------------------------------------------------
+# Important mail: a red AI/Important label in the inbox list, plus Gmail's own importance marker
+# ------------------------------------------------------------------------------------------------
+# Important =  from a VIP below, OR travel/booking mail, OR the AI finds a direct question/task aimed at me.
+[important]
+enabled = true
+label = "AI/Important"
+also_mark_gmail_important = true
+star = false
+threshold = 0.70            # how sure the AI must be that there is a question/task for me
+max_junk = 0.30             # ...and it must NOT look like cold sales / marketing / spam above this
+min_personal = 0.35         # ...and must look like a real person writing to me (not an automated notice)
+# Anything from these exact addresses is important:
+vip = [
+  # "boss@yourcompany.com",
+  # "key.customer@client.example",
+]
+# Mail from these travel companies (not mass mailings), and anything that looks like a booking or
+# reservation with a confirmation number, is important. Add your airlines and hotel chains.
+travel_domains = [
+  "airfrance.com", "klm.com", "britishairways.com", "ba.com", "virginatlantic.com", "lufthansa.com",
+  "delta.com", "united.com", "aa.com", "emirates.com", "ryanair.com", "easyjet.com",
+  "booking.com", "airbnb.com", "expedia.com", "hilton.com", "marriott.com", "ihg.com", "accor.com",
+  "hyatt.com", "eurostar.com", "trainline.com",
+]
+
+# ------------------------------------------------------------------------------------------------
+# Customers and prospects: one Gmail label per company domain, nested under a parent label
+# ------------------------------------------------------------------------------------------------
+# How to manage it:
+#  - Put the parent label ("Customers") on any email from a new company. On the next run its domain is learned,
+#    "Customers/<domain>" is created, and every email to or from that domain gets labelled.
+#  - Or create a label named "Customers/<domain>" by hand (e.g. "Customers/acme.example").
+#  - Delete a customer's label (or `triage customers remove <domain>`) to drop that customer for good.
+#  - Customer mail is never filtered as junk.
+[customers]
+enabled = true
+parent_label = "Customers"
+# Companies to label on the first run, before the AI finds any. Use the registrable domain.
+seed_domains = [
+  # "acme.example",
+  # "globex.example",
+]
+ai_detect = true            # the AI looks for customer/prospect conversations (POCs, RFPs, technical questions)
+auto_add_ai = false         # false: list what the AI finds (triage customers candidates) for you to approve;
+                            # true: add them automatically (the AI is stricter than it looks, but check the list)
+ai_threshold = 0.80         # lowered by 0.10 when a colleague is on the email
+max_new_per_run = 10
+ignore_domains = [          # never treated as customers
+  "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com", "me.com",
+  "proton.me", "protonmail.com", "aol.com", "msn.com",
+]
