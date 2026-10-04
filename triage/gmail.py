@@ -47,7 +47,7 @@ def get_service(interactive=True):
 
 def my_addresses(svc):
     """Primary address plus every send-as alias on the account."""
-    addrs = {svc.users().getProfile(userId="me").execute()["emailAddress"].lower()}
+    addrs = {backoff(lambda: svc.users().getProfile(userId="me").execute())["emailAddress"].lower()}
     try:
         for a in svc.users().settings().sendAs().list(userId="me").execute().get("sendAs", []):
             addrs.add(a["sendAsEmail"].lower())
@@ -88,14 +88,14 @@ def backoff(call, tries=6):
 # ---------- labels ----------
 
 def ensure_labels(svc, names, colors=None):
-    existing = {l["name"]: l["id"] for l in svc.users().labels().list(userId="me").execute()["labels"]}
+    existing = {l["name"]: l["id"] for l in backoff(lambda: svc.users().labels().list(userId="me").execute())["labels"]}
     out = {}
     for n in names:
         if n not in existing:
             body = {"name": n, "labelListVisibility": "labelShow", "messageListVisibility": "show"}
             if colors and n in colors:
                 body["color"] = colors[n]
-            created = svc.users().labels().create(userId="me", body=body).execute()
+            created = backoff(lambda: svc.users().labels().create(userId="me", body=body).execute())
             existing[n] = created["id"]
         out[n] = existing[n]
     return out

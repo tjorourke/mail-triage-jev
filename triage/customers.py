@@ -85,7 +85,7 @@ def sync(svc, db, cfg):
         return
     parent = cc["parent_label"]
     parent_id = ensure_parent(svc, cfg)
-    gl = {l["name"]: l["id"] for l in svc.users().labels().list(userId="me").execute()["labels"]}
+    gl = {l["name"]: l["id"] for l in gmail.backoff(lambda: svc.users().labels().list(userId="me").execute())["labels"]}
     customers = db.customers()
     rejected = db.not_customers()
 
