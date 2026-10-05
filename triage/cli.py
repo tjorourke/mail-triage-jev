@@ -509,7 +509,7 @@ def cmd_resume(args, cfg):
 
 def cmd_status(args, cfg):
     import subprocess
-    out = subprocess.run(["launchctl", "print", f"gui/{__import__('os').getuid()}/com.tom.mail-triage"],
+    out = subprocess.run(["launchctl", "print", f"gui/{__import__("os").getuid()}/com.mail-triage"],
                          capture_output=True, text=True).stdout
     state = next((l.split("=")[1].strip() for l in out.splitlines() if l.strip().startswith("state =")), "not installed")
     print(f"service: {state}")
