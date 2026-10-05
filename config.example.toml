@@ -15,6 +15,9 @@ mode = "shadow"
 threshold = 0.85
 # Mail addressed ONLY to me (nobody else in To/Cc) is more likely to be cold outreach, so the bar is a bit lower.
 threshold_only_to_me = 0.80
+# Lower bar when the model's top pick is cold_sales_outreach. Receipts and bookings that look junk-ish
+# are scored as spam_or_phishing, not outreach, so they still need the bars above.
+threshold_outreach = 0.75
 
 # Each run looks at inbox mail from the last N days that it has not seen before.
 lookback_days = 14

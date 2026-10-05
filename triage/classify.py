@@ -242,7 +242,12 @@ def decide(probs, cfg, threshold=None):
         mass[a] = mass.get(a, 0.0) + p
     top_cat = max(probs, key=probs.get)
     best = max((a for a in mass if a != "keep"), key=lambda a: mass[a], default=None)
-    if best and mass[best] >= (threshold if threshold is not None else cfg["threshold"]):
+    thr = threshold if threshold is not None else cfg["threshold"]
+    # Cold outreach gets its own, lower bar, but only when it is the model's top pick. Bookings and
+    # receipts that score high on junk land on spam_or_phishing instead, so they keep the normal bar.
+    if top_cat == "cold_sales_outreach" and "threshold_outreach" in cfg:
+        thr = min(thr, cfg["threshold_outreach"])
+    if best and mass[best] >= thr:
         return best, mass[best], top_cat
     return "keep", mass.get("keep", 0.0), top_cat
 
