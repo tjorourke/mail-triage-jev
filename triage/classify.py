@@ -132,7 +132,6 @@ class Classifier:
     def __init__(self, cfg):
         self.cfg = cfg
         self.model = self.processor = None
-        self.last_used = 0.0
 
     def _load(self):
         import torch
@@ -155,7 +154,6 @@ class Classifier:
         from joint_schema_model import systemone
         request = {"model": "clef-flash", "state": build_state(m, self.cfg["model"]["body_chars"], me, known_sender, replied_in_thread),
                    "questions": {"needs_action": ACTION_QUESTION}}
-        self.last_used = time.time()
         with torch.inference_mode():
             resp = systemone(self.model, self.processor, request,
                              max_length=self.cfg["model"]["max_state_tokens"] + 1500)
@@ -169,7 +167,6 @@ class Classifier:
         from joint_schema_model import systemone
         request = {"model": "clef-flash", "state": build_state(m, self.cfg["model"]["body_chars"], me, known_sender, replied_in_thread),
                    "questions": {"customer": customer_question(self.cfg)}}
-        self.last_used = time.time()
         with torch.inference_mode():
             resp = systemone(self.model, self.processor, request,
                              max_length=self.cfg["model"]["max_state_tokens"] + 1500)
@@ -182,7 +179,6 @@ class Classifier:
         from joint_schema_model import systemone
         request = {"model": "clef-flash", "state": build_state(m, self.cfg["model"]["body_chars"], me, known_sender, replied_in_thread),
                    "questions": questions}
-        self.last_used = time.time()
         with torch.inference_mode():
             resp = systemone(self.model, self.processor, request,
                              max_length=self.cfg["model"]["max_state_tokens"] + 1500)
@@ -199,17 +195,6 @@ class Classifier:
         """Probability that the email needs action today or tomorrow."""
         return self._ask(m, me, known_sender, replied_in_thread, {"urgency": URGENCY_QUESTION})["urgency"]["probabilities"]["2"]
 
-    def unload(self):
-        if self.model is None:
-            return
-        import gc
-        import torch
-        self.model = self.processor = None
-        gc.collect()
-        if torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-        print("[model] unloaded (idle)", file=sys.stderr)
-
     def classify(self, m, me=frozenset(), known_sender=False, replied_in_thread=False):
         """Return {category: probability}."""
         if self.model is None:
@@ -223,7 +208,6 @@ class Classifier:
                 "category": {"type": "choice", "instructions": instructions(self.cfg), "criteria": CATEGORIES},
             },
         }
-        self.last_used = time.time()
         with torch.inference_mode():
             resp = systemone(self.model, self.processor, request,
                              max_length=self.cfg["model"]["max_state_tokens"] + 1500)

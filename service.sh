@@ -82,7 +82,7 @@ case "$1" in
   deploy)    (cd "$DIR" && uv sync -q); mkdir -p "$DIR/logs"
              launchctl bootout gui/$UID_ "$PLIST" 2>/dev/null || true; write_plist
              launchctl bootstrap gui/$UID_ "$PLIST" && echo "deployed and restarted" ;;
-  run-now)   # Skip the hourly wait. A fresh daemon checks straight away and keeps one model in memory;
+  run-now)   # Skip the hourly wait. A fresh daemon checks straight away, in a process that exits when done;
              # when paused or not loaded, a one-off run ignores the pause. run.lock stops overlaps.
              if loaded && ! (cd "$DIR" && "$DIR/.venv/bin/triage" status | grep -q '^standing down because: [^n]'); then
                launchctl kickstart -k gui/$UID_/$LABEL && echo "daemon restarted: checking new mail now"

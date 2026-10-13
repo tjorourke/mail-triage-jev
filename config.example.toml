@@ -26,8 +26,7 @@ max_per_run = 200
 # ------------------------------------------------------------------------------------------------
 # Background service (see README: "Run it automatically")
 # ------------------------------------------------------------------------------------------------
-interval_seconds = 3600     # how often to check
-idle_unload_minutes = 10    # free the model's memory this long after a run
+interval_seconds = 3600     # how often to check (each check runs in its own process and frees the model when it ends)
 only_on_power = true        # skip runs while on battery
 # The service also stands down when `triage pause` is on (see "Pause" in the README).
 

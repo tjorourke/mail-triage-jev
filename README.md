@@ -81,7 +81,7 @@ uv run triage undo --since 24h              # panic button: put the last 24 hour
 ./service.sh uninstall
 ```
 
-macOS may ask once for Keychain access; choose **Always Allow**. The model is loaded only when there is new mail and is unloaded 10 minutes later.
+macOS may ask once for Keychain access; choose **Always Allow**. Each hourly check runs in its own process and loads the model only when there is new mail, so its ~18 GB goes back to macOS as soon as the check finishes.
 
 **Pause it** for a demo or a call: `uv run triage pause 2h` and `uv run triage resume`. To tie it to Do Not Disturb, create two Shortcuts automations (Focus → Do Not Disturb turns on/off → *Run Shell Script*) that run `bin/focus-on` and `bin/focus-off`.
 

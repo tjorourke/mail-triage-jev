@@ -22,6 +22,7 @@ FEEDBACK_DAYS = 7
 CONTACTS_REFRESH_SECS = 300
 FEEDBACK_REFRESH_SECS = 30 * 60
 CHUNK = 100   # emails fetched, classified and tagged at a time (keeps Gmail quota use gentle)
+RUN_TIMEOUT_SECS = 2 * 3600   # the daemon kills a check that is still going after this, so the next one can start
 
 
 def setup_logging(cfg):
@@ -314,6 +315,9 @@ def process(svc, db, cfg, lab, mails, clf, dry_run=False):
 
 def cmd_run(args, cfg, clf=None):
     """One check, holding an exclusive lock for exactly its duration (released even if it fails)."""
+    service = getattr(args, "service", False)   # started by `triage daemon`
+    if service:
+        cfg["_respect_pause"] = True
     lock = open(cfg["root"] / "logs" / "run.lock", "w")
     try:
         try:
@@ -326,6 +330,11 @@ def cmd_run(args, cfg, clf=None):
         except Paused:
             # Anything not yet processed is picked up on the next run.
             log.info("stopped part-way: %s", pause.reason(cfg, in_run=True))
+        except Exception:
+            if not service:
+                raise
+            log.exception("run failed; will retry on the next check")
+            sys.exit(1)
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
     finally:
@@ -388,11 +397,13 @@ def on_ac_power():
 
 
 def cmd_daemon(args, cfg):
-    """Wake every few minutes; run a check when `interval_seconds` have passed, on AC power, and not paused."""
-    clf = Classifier(cfg)
-    args.mode = args.days = args.limit = None
-    args.dry_run = False
-    cfg["_respect_pause"] = True
+    """Wake every few minutes; run a check when `interval_seconds` have passed, on AC power, and not paused.
+
+    Each check is a `triage run` in its own process, so the model's ~18 GB is held only while a check runs and
+    goes back to macOS when that process exits, instead of sitting in memory (or swap) between checks.
+    """
+    import subprocess
+    check = [sys.executable, "-m", "triage.cli", "run", "--service"]
     last_run, last_msg = 0.0, None
     while True:
         try:
@@ -408,13 +419,12 @@ def cmd_daemon(args, cfg):
                     if why != last_msg:
                         log.info(why)
                         last_msg = why
-                    clf.unload()   # free the ~18 GB while I'm busy
                 else:
                     last_msg = None
-                    cmd_run(args, cfg, clf)
+                    code = subprocess.run(check, cwd=cfg["root"], timeout=RUN_TIMEOUT_SECS).returncode
+                    if code not in (0, 1):   # 1: the check has already logged why
+                        log.error("check exited with code %d; will retry on the next check", code)
                     last_run = time.time()
-            if clf.model is not None and time.time() - clf.last_used > cfg["idle_unload_minutes"] * 60:
-                clf.unload()
         except Exception:
             log.exception("run failed; will retry on the next check")
             last_run = time.time()
@@ -838,6 +848,7 @@ def main():
     r.add_argument("--days", type=int)
     r.add_argument("--limit", type=int)
     r.add_argument("--dry-run", action="store_true", help="classify and print, change nothing")
+    r.add_argument("--service", action="store_true", help=argparse.SUPPRESS)   # the daemon's own checks
     r.set_defaults(fn=cmd_run)
     b = sub.add_parser("backfill", help="clean up existing inbox mail")
     b.add_argument("--days", type=int, default=30)
